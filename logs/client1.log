@@ -5,3 +5,5 @@
 [17:02:26] client1: who are you
 [17:02:39] client1: who are  you @llm
 [17:08:17] client1: @ai whoo are you
+[18:48:08] client1: @ai hi whats up?
+[18:48:10] AI (AI): I'm sorry, but I couldn't process your request. It seems the LLM provider is not available. Please make sure at least one client has the OPENAI_API_KEY set and is running in provider mode.

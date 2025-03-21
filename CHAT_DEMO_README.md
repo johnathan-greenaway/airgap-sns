@@ -94,16 +94,40 @@ tmux kill-session -t airgap-chat-demo
 
 ## Remote Connection Setup
 
-To connect from a different machine:
+To connect from a different machine, you have two options:
+
+### Option 1: Using Secure Tunnel (Recommended)
+
+This method creates a secure tunnel that works across different networks without port forwarding:
+
+1. On the host machine, run the demo with the tunnel flag:
+   ```bash
+   ./run_chat_demo.sh --tunnel-on
+   ```
+   
+   This will create a secure tunnel and save the connection URL to `tunnel_connection.txt`.
+
+2. On the remote machine, run:
+   ```bash
+   python3 chat_app.py --id remote-user --channel demo-chat --host <TUNNEL_URL> --auth-key demo-key
+   ```
+   
+   Replace `<TUNNEL_URL>` with the URL from `tunnel_connection.txt`.
+
+3. No port forwarding or IP configuration needed!
+
+### Option 2: Direct Connection
+
+This method requires both machines to be on the same network or have proper port forwarding:
 
 1. Start the server on the host machine using one of these methods:
    
-   **Option 1:** Start a standalone server:
+   **Option A:** Start a standalone server:
    ```bash
    python3 -m uvicorn host:app --host 0.0.0.0 --port 9000
    ```
    
-   **Option 2:** Start a client with integrated server:
+   **Option B:** Start a client with integrated server:
    ```bash
    python3 chat_app.py --id host-client --channel demo-chat --auth-key demo-key --start-server
    ```
@@ -145,6 +169,20 @@ To connect from a different machine:
    - Check the logs for any API errors
 
 ## Advanced Usage
+
+### Secure Tunnel for Remote Access
+
+To enable the secure tunnel for remote connections:
+
+```bash
+# When running the demo script
+./run_chat_demo.sh --tunnel-on
+
+# When running a standalone client with server
+python3 chat_app.py --id host-client --channel demo-chat --auth-key demo-key --start-server --tunnel-on
+```
+
+The secure tunnel requires the `zrok` package, which will be automatically installed if missing. You'll need to run `zrok login` to configure your account the first time.
 
 ### Custom Authentication
 

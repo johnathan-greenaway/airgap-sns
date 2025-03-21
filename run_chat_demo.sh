@@ -2,6 +2,44 @@
 # Run Chat Demo Script for Airgap SNS
 # This script starts the notification server and multiple chat clients in separate terminals
 
+# Process command line arguments
+TUNNEL_ENABLED=false
+for arg in "$@"; do
+    case $arg in
+        --tunnel-on)
+            TUNNEL_ENABLED=true
+            shift # Remove --tunnel-on from processing
+            ;;
+        *)
+            # Unknown option
+            ;;
+    esac
+done
+
+# Check if zrok is installed if tunnel is enabled
+if [ "$TUNNEL_ENABLED" = true ]; then
+    if ! pip3 list | grep -q zrok; then
+        echo "Secure tunnel requested but zrok package is not installed."
+        echo "Installing zrok package..."
+        pip3 install zrok
+        
+        # Check if installation was successful
+        if ! pip3 list | grep -q zrok; then
+            echo "Failed to install zrok. Continuing without secure tunnel."
+            TUNNEL_ENABLED=false
+        else
+            echo "zrok installed successfully."
+            
+            # Check if zrok is configured
+            if ! zrok status &>/dev/null; then
+                echo "zrok is not configured. Please run 'zrok login' manually."
+                echo "Continuing without secure tunnel."
+                TUNNEL_ENABLED=false
+            fi
+        fi
+    fi
+fi
+
 # Check if tmux is installed
 if ! command -v tmux &> /dev/null; then
     echo "tmux is required for this script. Please install it first."
@@ -66,14 +104,20 @@ if [ "$LLM_ENABLED" = true ]; then
 fi
 
 # Start client 1 with integrated server (LLM provider - only this client needs the API key)
+TUNNEL_FLAG=""
+if [ "$TUNNEL_ENABLED" = true ]; then
+    TUNNEL_FLAG="--tunnel-on"
+    echo "Secure tunnel enabled. Remote connections will be possible."
+fi
+
 if [ "$LLM_ENABLED" = true ]; then
     # Use environment variable instead of command line argument for API key
-    create_window "provider" "echo 'Starting LLM Provider Client with integrated server...' && OPENAI_API_KEY=\"$OPENAI_API_KEY\" python3 chat_app.py --id provider --channel $CHANNEL --auth-key $AUTH_KEY --log-file $LOG_DIR/provider.log --start-server --llm-model gpt-3.5-turbo"
+    create_window "provider" "echo 'Starting LLM Provider Client with integrated server...' && OPENAI_API_KEY=\"$OPENAI_API_KEY\" python3 chat_app.py --id provider --channel $CHANNEL --auth-key $AUTH_KEY --log-file $LOG_DIR/provider.log --start-server --llm-model gpt-3.5-turbo $TUNNEL_FLAG"
     
     # Print confirmation that LLM is enabled
     echo "LLM provider started with API key. AI responses should work."
 else
-    create_window "provider" "echo 'Starting Provider Client with integrated server (LLM disabled)...' && python3 chat_app.py --id provider --channel $CHANNEL --auth-key $AUTH_KEY --log-file $LOG_DIR/provider.log --start-server"
+    create_window "provider" "echo 'Starting Provider Client with integrated server (LLM disabled)...' && python3 chat_app.py --id provider --channel $CHANNEL --auth-key $AUTH_KEY --log-file $LOG_DIR/provider.log --start-server $TUNNEL_FLAG"
     
     # Print warning that LLM is disabled
     echo "Warning: LLM integration is disabled. AI responses will not work."
@@ -99,7 +143,43 @@ create_window "client2" "echo 'Starting Chat Client 2 (different network)...' &&
 create_window "spectator" "echo 'Starting Spectator Client...' && python3 chat_app.py --id spectator --channel $CHANNEL --auth-key $AUTH_KEY --log-file $LOG_DIR/spectator.log"
 
 # Display usage instructions in a separate window
-create_window "help" "cat << 'EOF'
+if [ "$TUNNEL_ENABLED" = true ]; then
+    # Instructions with tunnel info
+    create_window "help" "cat << 'EOF'
+=== AIRGAP SNS CHAT DEMO INSTRUCTIONS ===
+
+CHAT COMMANDS:
+  - Type a message and press Enter to send it to all clients
+  - Type @ai followed by a question to get an AI response (e.g., '@ai what is the weather?')
+  - Type /help to see all available commands
+  - Type /users to see all connected users
+  - Type /history to see message history
+  - Type /exit or /quit to exit the chat
+
+REMOTE CONNECTION SETUP:
+  A secure tunnel has been created for remote connections.
+  
+  1. Check the tunnel_connection.txt file for the connection URL
+  
+  2. On the remote machine, run:
+     python3 chat_app.py --id remote-user --channel $CHANNEL --host <TUNNEL_URL> --auth-key $AUTH_KEY
+     
+     Replace <TUNNEL_URL> with the URL from tunnel_connection.txt
+     
+  3. No port forwarding or IP configuration needed!
+
+TMUX NAVIGATION:
+  - Ctrl+B N: Next window
+  - Ctrl+B P: Previous window
+  - Ctrl+B D: Detach from session
+  - Ctrl+B [: Enter scroll mode (use arrow keys to scroll, q to exit)
+EOF
+echo 'Press Enter to continue...'
+read
+"
+else
+    # Standard instructions
+    create_window "help" "cat << 'EOF'
 === AIRGAP SNS CHAT DEMO INSTRUCTIONS ===
 
 CHAT COMMANDS:
@@ -121,16 +201,20 @@ REMOTE CONNECTION SETUP:
      Replace HOST_IP with the IP address of the server machine.
      
   3. For multiple networks, ensure port 9000 is accessible (may require port forwarding)
+  
+  TIP: Run with --tunnel-on flag to create a secure tunnel for easier remote connections:
+      ./run_chat_demo.sh --tunnel-on
 
 TMUX NAVIGATION:
   - Ctrl+B N: Next window
   - Ctrl+B P: Previous window
   - Ctrl+B D: Detach from session
   - Ctrl+B [: Enter scroll mode (use arrow keys to scroll, q to exit)
-
 EOF
 echo 'Press Enter to continue...'
-read"
+read
+"
+fi
 
 # Attach to the tmux session - select client1 window if it exists, otherwise server
 echo "Attaching to tmux session..."

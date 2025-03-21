@@ -28,6 +28,8 @@ import time
 import hashlib
 import threading
 import socket
+import subprocess
+import shutil
 from typing import Dict, Any, List, Optional, Set, Tuple
 from datetime import datetime
 
@@ -56,10 +58,21 @@ DEFAULT_MODEL = "gpt-3.5-turbo"
 DEFAULT_LOG_FILE = "chat_log.txt"
 DEFAULT_AUTH_KEY = "demo-key"  # Default auth key (should be changed in production)
 DEFAULT_SERVER_PORT = 9000
+DEFAULT_TUNNEL_FILE = "tunnel_connection.txt"
 DEFAULT_SYSTEM_PROMPT = """
 You are a helpful assistant in a group chat. You can see messages from multiple users and respond to them.
 Keep your responses concise and helpful. If you're not sure about something, it's okay to say so.
 """
+
+# Check if zrok is available
+TUNNEL_AVAILABLE = False
+try:
+    import zrok
+    from zrok.model import ShareRequest
+    import atexit
+    TUNNEL_AVAILABLE = True
+except ImportError:
+    pass
 
 # Message types
 MSG_TYPE_CHAT = "chat"
@@ -69,8 +82,10 @@ MSG_TYPE_LLM_RESPONSE = "llm_response"
 MSG_TYPE_AUTH = "auth"
 MSG_TYPE_AUTH_RESPONSE = "auth_response"
 
-# Server process
+# Server process and tunnel
 server_process = None
+tunnel_share = None
+tunnel_url = None
 
 class ChatMessage:
     """Represents a chat message"""
@@ -112,13 +127,108 @@ def is_port_in_use(port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         return s.connect_ex(('localhost', port)) == 0
 
-def start_server_in_thread(host: str = "0.0.0.0", port: int = DEFAULT_SERVER_PORT) -> None:
+def create_secure_tunnel(port: int = DEFAULT_SERVER_PORT) -> Optional[str]:
+    """Create a secure tunnel to the server"""
+    global tunnel_share, tunnel_url
+    
+    if not TUNNEL_AVAILABLE:
+        logger.warning("Secure tunnel requested but zrok package is not installed")
+        logger.warning("Install with: pip install zrok")
+        return None
+        
+    try:
+        # Set up tunnel
+        logger.info("Creating secure tunnel...")
+        root = zrok.environment.root.Load()
+        
+        # Check if zrok is configured
+        if not root or not root.Config:
+            logger.warning("Secure tunnel not configured. Please run 'zrok login' first")
+            return None
+            
+        # Create share
+        share = zrok.share.CreateShare(
+            root=root, 
+            request=ShareRequest(
+                BackendMode=zrok.model.TCP_TUNNEL_BACKEND_MODE,
+                ShareMode=zrok.model.PUBLIC_SHARE_MODE,
+                Frontends=['public'],
+                Target=f"localhost:{port}"
+            )
+        )
+        
+        # Store share for cleanup
+        tunnel_share = share
+        
+        # Get URL
+        if share and share.FrontendEndpoints and len(share.FrontendEndpoints) > 0:
+            url = share.FrontendEndpoints[0]
+            # Convert to WebSocket URL
+            if url.startswith("https://"):
+                ws_url = url.replace("https://", "wss://")
+            else:
+                ws_url = url.replace("http://", "ws://")
+                
+            # Add WebSocket path
+            if not ws_url.endswith("/"):
+                ws_url += "/"
+            ws_url += "ws/"
+            
+            # Save URL
+            tunnel_url = ws_url
+            
+            # Save to file
+            with open(DEFAULT_TUNNEL_FILE, "w") as f:
+                f.write(f"Tunnel URL: {ws_url}\n")
+                f.write(f"Share this URL with clients to connect remotely\n")
+            
+            # Print to console in a very visible way
+            print("\n" + "=" * 60)
+            print(f"SECURE TUNNEL CREATED - CONNECTION URL:")
+            print(f"=" * 60)
+            print(f"\n{ws_url}\n")
+            print(f"Share this URL with clients to connect remotely")
+            print(f"This URL is also saved to: {DEFAULT_TUNNEL_FILE}")
+            print("=" * 60 + "\n")
+                
+            # Register cleanup
+            def cleanup_tunnel():
+                if tunnel_share:
+                    try:
+                        logger.info("Cleaning up secure tunnel...")
+                        zrok.share.DeleteShare(root=root, shr=tunnel_share)
+                    except Exception as e:
+                        logger.error(f"Error cleaning up tunnel: {str(e)}")
+            
+            atexit.register(cleanup_tunnel)
+            
+            logger.info(f"Secure tunnel created successfully")
+            return ws_url
+            
+    except Exception as e:
+        logger.error(f"Error creating secure tunnel: {str(e)}")
+        
+    return None
+
+def start_server_in_thread(host: str = "0.0.0.0", port: int = DEFAULT_SERVER_PORT, enable_tunnel: bool = False) -> None:
     """Start the notification server in a separate thread"""
     global server_process
     
     # Check if port is already in use
     if is_port_in_use(port):
         logger.info(f"Port {port} is already in use. Assuming server is running.")
+        
+        # Try to create tunnel if requested
+        if enable_tunnel:
+            tunnel_url = create_secure_tunnel(port)
+            if tunnel_url:
+                logger.info(f"Secure tunnel created: {tunnel_url}")
+                print(f"\n=== SECURE TUNNEL CREATED ===")
+                print(f"Connection URL: {tunnel_url}")
+                print(f"Share this URL with clients to connect remotely")
+                print(f"Connection details saved to: {DEFAULT_TUNNEL_FILE}")
+                print(f"=============================\n")
+            
         return
     
     def run_server():
@@ -140,6 +250,13 @@ def start_server_in_thread(host: str = "0.0.0.0", port: int = DEFAULT_SERVER_POR
     for attempt in range(max_attempts):
         if is_port_in_use(port):
             logger.info(f"Server started successfully on port {port}")
+            
+            # Create tunnel if requested
+            if enable_tunnel:
+                tunnel_url = create_secure_tunnel(port)
+                if tunnel_url:
+                    logger.info(f"Secure tunnel created: {tunnel_url}")
+                    # URL is already printed prominently in create_secure_tunnel
             return
         time.sleep(1)
     
@@ -1008,6 +1125,7 @@ async def main():
     parser.add_argument("--no-log", help="Disable chat logging", action="store_true")
     parser.add_argument("--start-server", help="Start the notification server in the background", action="store_true")
     parser.add_argument("--server-port", help=f"Server port (default: {DEFAULT_SERVER_PORT})", type=int, default=DEFAULT_SERVER_PORT)
+    parser.add_argument("--tunnel-on", help="Create a secure tunnel for remote connections", action="store_true")
     args = parser.parse_args()
     
     # Get API key from environment (preferred) or arguments
@@ -1015,6 +1133,19 @@ async def main():
     
     # Determine log file
     log_file = None if args.no_log else args.log_file
+    
+    # Check for tunnel option
+    if args.tunnel_on and not TUNNEL_AVAILABLE:
+        logger.warning("Secure tunnel requested but zrok package is not installed")
+        logger.warning("Install with: pip install zrok")
+        print("\nWARNING: Secure tunnel requested but zrok package is not installed")
+        print("To enable secure tunneling, install zrok: pip install zrok")
+        print("Then run 'zrok login' to configure your account\n")
+        
+        # Ask if user wants to continue without tunnel
+        response = input("Continue without secure tunnel? (y/n): ")
+        if response.lower() != 'y':
+            return
     
     # Start server if requested
     if args.start_server:
@@ -1026,8 +1157,8 @@ async def main():
         port_match = re.match(r"ws://[^:]+:(\d+)/.*", args.host)
         server_port = int(port_match.group(1)) if port_match else args.server_port
         
-        # Start server
-        start_server_in_thread(host=server_host, port=server_port)
+        # Start server with tunnel if requested
+        start_server_in_thread(host=server_host, port=server_port, enable_tunnel=args.tunnel_on)
         
         # Wait for server to be available
         if not wait_for_server(port=server_port):
