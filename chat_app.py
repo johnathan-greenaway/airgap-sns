@@ -750,8 +750,60 @@ class ChatClient:
             
             logger.info(f"Sent LLM request (ID: {request_id})")
             
+            # If no LLM provider is available, generate a fallback response
+            # Wait a bit to see if a provider responds
+            await asyncio.sleep(2)
+            
+            # Check if we received a response (would be in message history)
+            found_response = False
+            for msg in reversed(self.message_history[-5:]):
+                if msg.is_llm and msg.sender == "AI":
+                    found_response = True
+                    break
+            
+            if not found_response:
+                # No response received, generate a fallback
+                logger.warning("No LLM provider responded, generating fallback response")
+                
+                # Create fallback message
+                fallback_message = ChatMessage(
+                    sender="AI",
+                    content="I'm sorry, but I couldn't process your request. It seems the LLM provider is not available. Please make sure at least one client has the OPENAI_API_KEY set and is running in provider mode.",
+                    is_llm=True
+                )
+                
+                # Add to history
+                self.message_history.append(fallback_message)
+                
+                # Log message
+                self.log_message(fallback_message)
+                
+                # Print message
+                print(f"\n{fallback_message}")
+                print("> ", end="", flush=True)
+                
+                # Send message to other clients
+                await self.send_chat_message(fallback_message)
+            
         except Exception as e:
             logger.error(f"Error sending LLM request: {str(e)}")
+            
+            # Create error message
+            error_message = ChatMessage(
+                sender="AI",
+                content=f"Sorry, I encountered an error while processing your request: {str(e)}",
+                is_llm=True
+            )
+            
+            # Add to history
+            self.message_history.append(error_message)
+            
+            # Log message
+            self.log_message(error_message)
+            
+            # Print message
+            print(f"\n{error_message}")
+            print("> ", end="", flush=True)
     
     async def send_llm_response(self, request_id: str, user_id: str, content: str):
         """Send an LLM response"""

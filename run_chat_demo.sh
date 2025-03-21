@@ -53,12 +53,32 @@ CHANNEL="demo-chat"
 LOG_DIR="logs"
 mkdir -p $LOG_DIR
 
+# Check if OpenAI API key is valid
+if [ "$LLM_ENABLED" = true ]; then
+    echo "Verifying OpenAI API key..."
+    if [[ -z "$OPENAI_API_KEY" || "$OPENAI_API_KEY" == "your_api_key_here" ]]; then
+        echo "Warning: OPENAI_API_KEY appears to be invalid or not set properly."
+        echo "LLM integration will be disabled."
+        LLM_ENABLED=false
+    else
+        echo "OpenAI API key is set and appears valid."
+    fi
+fi
+
 # Start client 1 with integrated server (LLM provider - only this client needs the API key)
 if [ "$LLM_ENABLED" = true ]; then
     # Use environment variable instead of command line argument for API key
-    create_window "provider" "echo 'Starting LLM Provider Client with integrated server...' && OPENAI_API_KEY=\"$OPENAI_API_KEY\" python3 chat_app.py --id provider --channel $CHANNEL --auth-key $AUTH_KEY --log-file $LOG_DIR/provider.log --start-server"
+    create_window "provider" "echo 'Starting LLM Provider Client with integrated server...' && OPENAI_API_KEY=\"$OPENAI_API_KEY\" python3 chat_app.py --id provider --channel $CHANNEL --auth-key $AUTH_KEY --log-file $LOG_DIR/provider.log --start-server --llm-model gpt-3.5-turbo"
+    
+    # Print confirmation that LLM is enabled
+    echo "LLM provider started with API key. AI responses should work."
 else
     create_window "provider" "echo 'Starting Provider Client with integrated server (LLM disabled)...' && python3 chat_app.py --id provider --channel $CHANNEL --auth-key $AUTH_KEY --log-file $LOG_DIR/provider.log --start-server"
+    
+    # Print warning that LLM is disabled
+    echo "Warning: LLM integration is disabled. AI responses will not work."
+    echo "To enable LLM integration, set the OPENAI_API_KEY environment variable:"
+    echo "export OPENAI_API_KEY=your_api_key_here"
 fi
 
 # Keep the server window for logs
