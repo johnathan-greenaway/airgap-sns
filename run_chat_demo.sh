@@ -2,8 +2,16 @@
 # Run Chat Demo Script for Airgap SNS
 # This script starts the notification server and multiple chat clients in separate terminals
 
+# Load environment variables from .env file if it exists
+if [ -f .env ]; then
+    echo "Loading environment variables from .env file"
+    export $(grep -v '^#' .env | xargs)
+else
+    echo "No .env file found. Using default values or environment variables."
+fi
+
 # Process command line arguments
-TUNNEL_ENABLED=false
+TUNNEL_ENABLED=${TUNNEL_ENABLED:-false}
 for arg in "$@"; do
     case $arg in
         --tunnel-on)
@@ -82,10 +90,10 @@ create_window() {
 }
 
 # Authentication key for all clients
-AUTH_KEY="demo-key"
+AUTH_KEY=${AUTH_KEY:-"demo-key"}
 
 # Chat channel
-CHANNEL="demo-chat"
+CHANNEL=${CHANNEL:-"demo-chat"}
 
 # Log files
 LOG_DIR="logs"

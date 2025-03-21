@@ -12,6 +12,15 @@ from scheduler import schedule_job
 from burst import parse_burst
 import logging
 
+# Load environment variables from .env file if available
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+    logging.info("Loaded environment variables from .env file")
+except ImportError:
+    logging.warning("python-dotenv not installed. Environment variables must be set manually.")
+    logging.warning("Install with: pip install python-dotenv")
+
 # Default settings
 DEFAULT_PORT = 9000
 DEFAULT_TUNNEL_FILE = "tunnel_connection.txt"
@@ -297,8 +306,14 @@ if __name__ == "__main__":
     # Parse command line arguments
     args = parse_args()
     
+    # Get values from environment variables or arguments
+    host = args.host or os.environ.get("HOST", "0.0.0.0")
+    port = args.port or int(os.environ.get("PORT", DEFAULT_PORT))
+    tunnel_on = args.tunnel_on or os.environ.get("TUNNEL_ENABLED", "").lower() == "true"
+    reload_enabled = args.reload or os.environ.get("RELOAD_ENABLED", "").lower() == "true"
+    
     # Check for tunnel option
-    if args.tunnel_on:
+    if tunnel_on:
         if not TUNNEL_AVAILABLE:
             logger.warning("Secure tunnel requested but zrok package is not installed")
             print("\nWARNING: Secure tunnel requested but zrok package is not installed")
@@ -311,7 +326,7 @@ if __name__ == "__main__":
                 sys.exit(1)
         else:
             # Create tunnel
-            tunnel_url = create_secure_tunnel(args.port)
+            tunnel_url = create_secure_tunnel(port)
             if not tunnel_url:
                 logger.warning("Failed to create secure tunnel")
                 
@@ -321,5 +336,5 @@ if __name__ == "__main__":
                     sys.exit(1)
     
     # Start the server
-    logger.info(f"Starting Airgap SNS Notification Host on {args.host}:{args.port}")
-    uvicorn.run("host:app", host=args.host, port=args.port, reload=args.reload)
+    logger.info(f"Starting Airgap SNS Notification Host on {host}:{port}")
+    uvicorn.run("host:app", host=host, port=port, reload=reload_enabled)

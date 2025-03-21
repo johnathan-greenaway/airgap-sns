@@ -33,6 +33,15 @@ import shutil
 from typing import Dict, Any, List, Optional, Set, Tuple
 from datetime import datetime
 
+# Load environment variables from .env file if available
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+    logging.info("Loaded environment variables from .env file")
+except ImportError:
+    logging.warning("python-dotenv not installed. Environment variables must be set manually.")
+    logging.warning("Install with: pip install python-dotenv")
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -1128,8 +1137,13 @@ async def main():
     parser.add_argument("--tunnel-on", help="Create a secure tunnel for remote connections", action="store_true")
     args = parser.parse_args()
     
-    # Get API key from environment (preferred) or arguments
-    llm_api_key = os.environ.get("OPENAI_API_KEY") or args.llm_api_key
+    # Get values from environment variables or arguments
+    llm_api_key = args.llm_api_key or os.environ.get("OPENAI_API_KEY")
+    auth_key = args.auth_key or os.environ.get("AUTH_KEY", DEFAULT_AUTH_KEY)
+    channel = args.channel or os.environ.get("CHANNEL", DEFAULT_CHANNEL)
+    host_uri = args.host or os.environ.get("HOST_URI", DEFAULT_URI)
+    server_port = args.server_port or int(os.environ.get("PORT", DEFAULT_PORT))
+    tunnel_on = args.tunnel_on or os.environ.get("TUNNEL_ENABLED", "").lower() == "true"
     
     # Determine log file
     log_file = None if args.no_log else args.log_file
@@ -1168,11 +1182,11 @@ async def main():
     # Create chat client
     client = ChatClient(
         client_id=args.id,
-        host_uri=args.host,
-        channel=args.channel,
+        host_uri=host_uri,
+        channel=channel,
         llm_api_key=llm_api_key,
         llm_model=args.llm_model,
-        auth_key=args.auth_key,
+        auth_key=auth_key,
         log_file=log_file
     )
     

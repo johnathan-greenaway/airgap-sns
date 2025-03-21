@@ -2,11 +2,19 @@
 # Run Server Script for Airgap SNS
 # This script starts the notification server with optional secure tunnel
 
+# Load environment variables from .env file if it exists
+if [ -f .env ]; then
+    echo "Loading environment variables from .env file"
+    export $(grep -v '^#' .env | xargs)
+else
+    echo "No .env file found. Using default values or environment variables."
+fi
+
 # Process command line arguments
-TUNNEL_ENABLED=false
-RELOAD_ENABLED=false
-PORT=9000
-HOST="0.0.0.0"
+TUNNEL_ENABLED=${TUNNEL_ENABLED:-false}
+RELOAD_ENABLED=${RELOAD_ENABLED:-false}
+PORT=${PORT:-9000}
+HOST=${HOST:-"0.0.0.0"}
 
 # Parse arguments
 for arg in "$@"; do
