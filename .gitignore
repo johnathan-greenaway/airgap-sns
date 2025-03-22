@@ -6,7 +6,7 @@ __pycache__/*
 .env
 airgap_sns/core/__pycache__/*
 airgap_sns/chat/__pycache__/app.cpython-310.pyc
-airgap_sns/chat/app.py
+airgap_sns/chat/
 airgap_sns/host/__pycache__/__init__.cpython-310.pyc
 airgap_sns/host/__pycache__/server.cpython-310.pyc
 airgap_sns.egg-info/dependency_links.txt
