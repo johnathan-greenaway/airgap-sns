@@ -19,6 +19,15 @@ A complete, fully-functional Python implementation of an extensible, modular not
 pip install fastapi uvicorn websockets aiohttp python-dotenv cryptography ggwave sounddevice numpy
 ```
 
+For LLM integration:
+```bash
+# For OpenAI API
+pip install openai
+
+# For Ollama (local LLMs)
+pip install httpx
+```
+
 For secure tunnel support (optional):
 ```bash
 pip install zrok
@@ -27,6 +36,7 @@ pip install zrok
 Note: 
 - `ggwave` and `sounddevice` are optional dependencies for audio transmission features.
 - `zrok` is an optional dependency for creating secure tunnels for remote connections.
+- `httpx` is required for Ollama integration (local LLMs).
 
 ## Project Structure
 
@@ -63,8 +73,18 @@ Parameters:
 The system supports configuration via environment variables or a `.env` file. Create a `.env` file in the project root with the following variables:
 
 ```
-# OpenAI API key for LLM integration
+# LLM Provider settings
+# Choose between "openai" or "ollama"
+LLM_PROVIDER=openai
+
+# OpenAI settings (when LLM_PROVIDER=openai)
 OPENAI_API_KEY=your_api_key_here
+DEFAULT_MODEL=gpt-3.5-turbo
+
+# Ollama settings (when LLM_PROVIDER=ollama)
+OLLAMA_URL=http://localhost:11434
+OLLAMA_MODEL=llama2
+OLLAMA_STREAM=true
 
 # Authentication key for chat clients
 AUTH_KEY=demo-key
@@ -215,11 +235,28 @@ curl http://localhost:8000/webhooks
 Test integration with LLMs using the demo script:
 
 ```bash
-# Set your OpenAI API key
+# For OpenAI:
+export LLM_PROVIDER=openai
 export OPENAI_API_KEY=your_api_key_here
+export DEFAULT_MODEL=gpt-3.5-turbo
+
+# OR for Ollama (local LLMs):
+export LLM_PROVIDER=ollama
+export OLLAMA_MODEL=llama2
+export OLLAMA_URL=http://localhost:11434
 
 # Run the LLM integration demo
 python llm_integration_demo.py
+```
+
+For the chat demo with Ollama:
+```bash
+# Make sure Ollama is running
+ollama serve
+
+# Run the chat demo with Ollama
+export LLM_PROVIDER=ollama
+./run_chat_demo.sh
 ```
 
 ## Integration with LLMs

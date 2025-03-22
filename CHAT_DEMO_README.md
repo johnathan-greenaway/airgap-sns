@@ -5,7 +5,7 @@ This is a demonstration of a secure notification system (SNS) chat application t
 ## Features
 
 - Real-time chat using WebSocket connections
-- LLM integration (AI assistant) using OpenAI's API
+- LLM integration (AI assistant) using OpenAI API or Ollama
 - Cross-network communication
 - Simple authentication system
 - Chat logging
@@ -19,8 +19,13 @@ This is a demonstration of a secure notification system (SNS) chat application t
   - fastapi
   - uvicorn
   - websockets
-  - openai (optional, for LLM integration)
+  - openai (optional, for OpenAI LLM integration)
+  - httpx (optional, for Ollama LLM integration)
   - pydantic
+
+For Ollama integration:
+- Ollama installed and running (https://ollama.com)
+- A downloaded model (e.g., llama2)
 
 ## Installation
 
@@ -31,7 +36,13 @@ This is a demonstration of a secure notification system (SNS) chat application t
 
 2. Install required packages:
    ```bash
-   pip3 install fastapi uvicorn websockets openai pydantic
+   pip3 install fastapi uvicorn websockets pydantic
+   
+   # For OpenAI integration
+   pip3 install openai
+   
+   # For Ollama integration
+   pip3 install httpx
    ```
 
 3. Install tmux if not already installed:
@@ -47,9 +58,20 @@ This is a demonstration of a secure notification system (SNS) chat application t
    chmod +x run_chat_demo.sh
    ```
 
-2. (Optional) Set your OpenAI API key for LLM integration:
+2. Configure LLM provider:
+
+   For OpenAI:
    ```bash
+   export LLM_PROVIDER=openai
    export OPENAI_API_KEY=your_api_key_here
+   export DEFAULT_MODEL=gpt-3.5-turbo
+   ```
+
+   For Ollama:
+   ```bash
+   export LLM_PROVIDER=ollama
+   export OLLAMA_MODEL=llama2
+   export OLLAMA_URL=http://localhost:11434
    ```
 
 3. Run the demo script:
@@ -163,10 +185,16 @@ This method requires both machines to be on the same network or have proper port
 
 ### LLM Integration Issues
 
-1. **AI responses not working**:
+1. **OpenAI responses not working**:
    - Verify your OpenAI API key is set correctly
    - Ensure at least one client has the API key (provider client)
    - Check the logs for any API errors
+
+2. **Ollama responses not working**:
+   - Ensure Ollama is running (`ollama serve`)
+   - Verify the model is downloaded (`ollama pull llama2`)
+   - Check that OLLAMA_URL is set correctly
+   - Verify the OLLAMA_MODEL exists in your Ollama installation
 
 ## Advanced Usage
 
