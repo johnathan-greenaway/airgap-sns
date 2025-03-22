@@ -1,10 +1,29 @@
 import asyncio, websockets
+import argparse
+import os
+import sys
+import threading
+import socket
+import atexit
 from fastapi import FastAPI, WebSocket, BackgroundTasks
 from pydantic import BaseModel
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 from scheduler import schedule_job
 from burst import parse_burst
 import logging
+
+# Load environment variables from .env file if available
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+    logging.info("Loaded environment variables from .env file")
+except ImportError:
+    logging.warning("python-dotenv not installed. Environment variables must be set manually.")
+    logging.warning("Install with: pip install python-dotenv")
+
+# Default settings
+DEFAULT_PORT = 9000
+DEFAULT_TUNNEL_FILE = "tunnel_connection.txt"
 
 # Configure logging
 logging.basicConfig(
@@ -12,6 +31,20 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger("airgap-sns-host")
+
+# Check if zrok is available
+TUNNEL_AVAILABLE = False
+try:
+    import zrok
+    from zrok.model import ShareRequest
+    TUNNEL_AVAILABLE = True
+    logger.info("Secure tunnel support available (zrok package found)")
+except ImportError:
+    logger.warning("Secure tunnel support not available (zrok package not found)")
+
+# Tunnel variables
+tunnel_share = None
+tunnel_url = None
 
 # Try to import audio module with graceful fallback
 try:
@@ -22,6 +55,94 @@ except ImportError:
 
 app = FastAPI(title="Airgap SNS Notification Host", 
               description="Secure Notification System with audio capabilities")
+
+def is_port_in_use(port: int) -> bool:
+    """Check if a port is in use"""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        return s.connect_ex(('localhost', port)) == 0
+
+def create_secure_tunnel(port: int = DEFAULT_PORT) -> Optional[str]:
+    """Create a secure tunnel to the server"""
+    global tunnel_share, tunnel_url
+    
+    if not TUNNEL_AVAILABLE:
+        logger.warning("Secure tunnel requested but zrok package is not installed")
+        logger.warning("Install with: pip install zrok")
+        return None
+        
+    try:
+        # Set up tunnel
+        logger.info("Creating secure tunnel...")
+        root = zrok.environment.root.Load()
+        
+        # Check if zrok is configured
+        if not root or not root.Config:
+            logger.warning("Secure tunnel not configured. Please run 'zrok login' first")
+            return None
+            
+        # Create share
+        share = zrok.share.CreateShare(
+            root=root, 
+            request=ShareRequest(
+                BackendMode=zrok.model.TCP_TUNNEL_BACKEND_MODE,
+                ShareMode=zrok.model.PUBLIC_SHARE_MODE,
+                Frontends=['public'],
+                Target=f"localhost:{port}"
+            )
+        )
+        
+        # Store share for cleanup
+        tunnel_share = share
+        
+        # Get URL
+        if share and share.FrontendEndpoints and len(share.FrontendEndpoints) > 0:
+            url = share.FrontendEndpoints[0]
+            # Convert to WebSocket URL
+            if url.startswith("https://"):
+                ws_url = url.replace("https://", "wss://")
+            else:
+                ws_url = url.replace("http://", "ws://")
+                
+            # Add WebSocket path
+            if not ws_url.endswith("/"):
+                ws_url += "/"
+            ws_url += "ws/"
+            
+            # Save URL
+            tunnel_url = ws_url
+            
+            # Save to file
+            with open(DEFAULT_TUNNEL_FILE, "w") as f:
+                f.write(f"Tunnel URL: {ws_url}\n")
+                f.write(f"Share this URL with clients to connect remotely\n")
+            
+            # Print to console in a very visible way
+            print("\n" + "=" * 60)
+            print(f"SECURE TUNNEL CREATED - CONNECTION URL:")
+            print(f"=" * 60)
+            print(f"\n{ws_url}\n")
+            print(f"Share this URL with clients to connect remotely")
+            print(f"This URL is also saved to: {DEFAULT_TUNNEL_FILE}")
+            print("=" * 60 + "\n")
+                
+            # Register cleanup
+            def cleanup_tunnel():
+                if tunnel_share:
+                    try:
+                        logger.info("Cleaning up secure tunnel...")
+                        zrok.share.DeleteShare(root=root, shr=tunnel_share)
+                    except Exception as e:
+                        logger.error(f"Error cleaning up tunnel: {str(e)}")
+            
+            atexit.register(cleanup_tunnel)
+            
+            logger.info(f"Secure tunnel created successfully")
+            return ws_url
+            
+    except Exception as e:
+        logger.error(f"Error creating secure tunnel: {str(e)}")
+        
+    return None
 
 class PubSub:
     def __init__(self):
@@ -170,9 +291,50 @@ async def shutdown_event():
     pubsub.cleanup()
     logger.info("Server shutting down, resources cleaned up")
 
+def parse_args():
+    """Parse command line arguments"""
+    parser = argparse.ArgumentParser(description="Airgap SNS Notification Host")
+    parser.add_argument("--host", help="Host to bind to", default="0.0.0.0")
+    parser.add_argument("--port", help="Port to bind to", type=int, default=DEFAULT_PORT)
+    parser.add_argument("--tunnel-on", help="Create a secure tunnel for remote connections", action="store_true")
+    parser.add_argument("--reload", help="Enable auto-reload for development", action="store_true")
+    return parser.parse_args()
+
 if __name__ == "__main__":
     import uvicorn
     
+    # Parse command line arguments
+    args = parse_args()
+    
+    # Get values from environment variables or arguments
+    host = args.host or os.environ.get("HOST", "0.0.0.0")
+    port = args.port or int(os.environ.get("PORT", DEFAULT_PORT))
+    tunnel_on = args.tunnel_on or os.environ.get("TUNNEL_ENABLED", "").lower() == "true"
+    reload_enabled = args.reload or os.environ.get("RELOAD_ENABLED", "").lower() == "true"
+    
+    # Check for tunnel option
+    if tunnel_on:
+        if not TUNNEL_AVAILABLE:
+            logger.warning("Secure tunnel requested but zrok package is not installed")
+            print("\nWARNING: Secure tunnel requested but zrok package is not installed")
+            print("To enable secure tunneling, install zrok: pip install zrok")
+            print("Then run 'zrok login' to configure your account\n")
+            
+            # Ask if user wants to continue without tunnel
+            response = input("Continue without secure tunnel? (y/n): ")
+            if response.lower() != 'y':
+                sys.exit(1)
+        else:
+            # Create tunnel
+            tunnel_url = create_secure_tunnel(port)
+            if not tunnel_url:
+                logger.warning("Failed to create secure tunnel")
+                
+                # Ask if user wants to continue without tunnel
+                response = input("Continue without secure tunnel? (y/n): ")
+                if response.lower() != 'y':
+                    sys.exit(1)
+    
     # Start the server
-    logger.info("Starting Airgap SNS Notification Host")
-    uvicorn.run("host:app", host="0.0.0.0", port=9000, reload=True)
+    logger.info(f"Starting Airgap SNS Notification Host on {host}:{port}")
+    uvicorn.run("host:app", host=host, port=port, reload=reload_enabled)

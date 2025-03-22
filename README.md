@@ -19,7 +19,14 @@ A complete, fully-functional Python implementation of an extensible, modular not
 pip install fastapi uvicorn websockets aiohttp python-dotenv cryptography ggwave sounddevice numpy
 ```
 
-Note: `ggwave` and `sounddevice` are optional dependencies for audio transmission features.
+For secure tunnel support (optional):
+```bash
+pip install zrok
+```
+
+Note: 
+- `ggwave` and `sounddevice` are optional dependencies for audio transmission features.
+- `zrok` is an optional dependency for creating secure tunnels for remote connections.
 
 ## Project Structure
 
@@ -51,10 +58,52 @@ Parameters:
 - `audio`: Audio transmission (`tx`/`none`)
 - `pwd`: Optional password for encryption
 
+## Environment Variables
+
+The system supports configuration via environment variables or a `.env` file. Create a `.env` file in the project root with the following variables:
+
+```
+# OpenAI API key for LLM integration
+OPENAI_API_KEY=your_api_key_here
+
+# Authentication key for chat clients
+AUTH_KEY=demo-key
+
+# Chat channel name
+CHANNEL=demo-chat
+
+# Server configuration
+HOST=0.0.0.0
+PORT=9000
+
+# Enable/disable features
+# Set to "true" to enable, anything else to disable
+TUNNEL_ENABLED=false
+RELOAD_ENABLED=false
+```
+
+A sample `.env.sample` file is provided as a template.
+
 ## Usage
 
 ### Starting the Server
 
+Using the provided script:
+```bash
+# Make the script executable
+chmod +x run_server.sh
+
+# Start the server
+./run_server.sh
+
+# Start with secure tunnel for remote connections
+./run_server.sh --tunnel-on
+
+# Start with auto-reload for development
+./run_server.sh --reload
+```
+
+Or manually:
 ```bash
 uvicorn host:app --host 0.0.0.0 --port 9000
 ```
@@ -94,8 +143,9 @@ The project includes several test scripts to verify functionality:
 
 ### Quick Demo
 
-For a quick demonstration of the system, use the provided shell script:
+For a quick demonstration of the system, use the provided shell scripts:
 
+#### Basic Demo
 ```bash
 # Make the script executable (if not already)
 chmod +x run_demo.sh
@@ -109,6 +159,24 @@ This script uses tmux to start multiple components in separate windows:
 - Webhook test server
 - Receiver client (interactive mode)
 - Sender client (interactive mode)
+
+#### Chat Demo
+```bash
+# Make the script executable (if not already)
+chmod +x run_chat_demo.sh
+
+# Run the chat demo
+./run_chat_demo.sh
+
+# Run with secure tunnel for remote connections
+./run_chat_demo.sh --tunnel-on
+```
+
+This script starts a multi-user chat environment with:
+- Notification server
+- LLM provider client (if OpenAI API key is set)
+- Multiple chat clients
+- Help window with instructions
 
 You can then interact with the system by sending messages between clients.
 
@@ -174,11 +242,42 @@ python client.py --id sender --interactive
 > /audio Hello from an air-gapped device!
 ```
 
+## Secure Tunnel for Remote Connections
+
+The system supports creating secure tunnels for remote connections using zrok:
+
+1. Install zrok:
+   ```bash
+   pip install zrok
+   ```
+
+2. Configure zrok (first time only):
+   ```bash
+   zrok login
+   ```
+
+3. Start the server or chat demo with tunnel enabled:
+   ```bash
+   ./run_server.sh --tunnel-on
+   # or
+   ./run_chat_demo.sh --tunnel-on
+   ```
+
+4. The tunnel URL will be displayed and saved to `tunnel_connection.txt`
+
+5. On the remote machine, connect using the tunnel URL:
+   ```bash
+   python client.py --id remote-user --uri <TUNNEL_URL>
+   # or for chat demo
+   python chat_app.py --id remote-user --channel demo-chat --host <TUNNEL_URL> --auth-key demo-key
+   ```
+
 ## Security Considerations
 
 - All WebSocket connections should be secured with TLS in production
 - Passwords for encryption should be strong and securely managed
 - Audio transmission is susceptible to eavesdropping in shared spaces
+- When using secure tunnels, ensure you trust the tunnel provider
 
 ## Example Use Cases
 
