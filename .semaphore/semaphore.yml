@@ -15,14 +15,16 @@ blocks:
             - sem-version python 3.11
             - checkout
             - python -m pip install --upgrade pip
+            - cat setup.py  # Show the current setup.py content
+            - sed -i "s/version=\"[^\"]*\"/version=\"0.0.2\"/" setup.py  # Fix the version
+            - cat setup.py  # Show the fixed setup.py
             - pip install .
             - pip install pytest
-            - 'export BASE_VERSION=$(grep -o "version=[\"''][0-9]*\.[0-9]*\.[0-9]*" setup.py | grep -o "[0-9]*\.[0-9]*\.[0-9]*")'
+            - export BASE_VERSION="0.0.2"  # Use the fixed version
             - echo "Base version is $BASE_VERSION"
             - |
-              if [[ "${SEMAPHORE_GIT_BRANCH}" == "main" ]]; then
+              if [[ "${SEMAPHORE_GIT_BRANCH}" == "master" ]]; then
                 echo "On release branch - using version $BASE_VERSION for airgap-sns"
-                sed -i "s/version=[\"'][^\"']*[\"']/version=\"$BASE_VERSION\"/" setup.py
                 pip install twine build
                 python -m build
                 TWINE_USERNAME=__token__ TWINE_PASSWORD=${TWINE_PASSWORD} python -m twine upload --verbose dist/*
@@ -31,7 +33,7 @@ blocks:
               if [[ "${SEMAPHORE_GIT_BRANCH}" == "development" ]]; then
                 DEV_VERSION="${BASE_VERSION}.dev1"
                 echo "On development branch - using version $DEV_VERSION for airgap-sns"
-                sed -i "s/version=[\"'][^\"']*[\"']/version=\"$DEV_VERSION\"/" setup.py
+                sed -i "s/version=\"[^\"]*\"/version=\"$DEV_VERSION\"/" setup.py
                 pip install twine build
                 python -m build
                 TWINE_USERNAME=__token__ TWINE_PASSWORD=${TWINE_PASSWORD} python -m twine upload --verbose --skip-existing dist/*
@@ -41,7 +43,7 @@ blocks:
                 FEATURE_NAME=$(echo ${SEMAPHORE_GIT_BRANCH} | sed "s/feature\///" | sed "s/[-\/]/./g")
                 DEV_VERSION="${BASE_VERSION}.dev0+feature.${FEATURE_NAME}"
                 echo "On feature branch - using version $DEV_VERSION for airgap-sns"
-                sed -i "s/version=[\"'][^\"']*[\"']/version=\"$DEV_VERSION\"/" setup.py
+                sed -i "s/version=\"[^\"]*\"/version=\"$DEV_VERSION\"/" setup.py
                 pip install twine build
                 python -m build
                 TWINE_USERNAME=__token__ TWINE_PASSWORD=${TWINE_PASSWORD} python -m twine upload --verbose --skip-existing dist/*
