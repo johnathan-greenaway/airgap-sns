@@ -5,7 +5,7 @@ This is a demonstration of a secure notification system (SNS) chat application t
 ## Features
 
 - Real-time chat using WebSocket connections
-- LLM integration (AI assistant) using OpenAI's API
+- LLM integration (AI assistant) using OpenAI API or Ollama
 - Cross-network communication
 - Simple authentication system
 - Chat logging
@@ -19,8 +19,13 @@ This is a demonstration of a secure notification system (SNS) chat application t
   - fastapi
   - uvicorn
   - websockets
-  - openai (optional, for LLM integration)
+  - openai (optional, for OpenAI LLM integration)
+  - httpx (optional, for Ollama LLM integration)
   - pydantic
+
+For Ollama integration:
+- Ollama installed and running (https://ollama.com)
+- A downloaded model (e.g., llama2)
 
 ## Installation
 
@@ -31,7 +36,13 @@ This is a demonstration of a secure notification system (SNS) chat application t
 
 2. Install required packages:
    ```bash
-   pip3 install fastapi uvicorn websockets openai pydantic
+   pip3 install fastapi uvicorn websockets pydantic
+   
+   # For OpenAI integration
+   pip3 install openai
+   
+   # For Ollama integration
+   pip3 install httpx
    ```
 
 3. Install tmux if not already installed:
@@ -47,9 +58,20 @@ This is a demonstration of a secure notification system (SNS) chat application t
    chmod +x run_chat_demo.sh
    ```
 
-2. (Optional) Set your OpenAI API key for LLM integration:
+2. Configure LLM provider:
+
+   For OpenAI:
    ```bash
+   export LLM_PROVIDER=openai
    export OPENAI_API_KEY=your_api_key_here
+   export DEFAULT_MODEL=gpt-3.5-turbo
+   ```
+
+   For Ollama:
+   ```bash
+   export LLM_PROVIDER=ollama
+   export OLLAMA_MODEL=llama2
+   export OLLAMA_URL=http://localhost:11434
    ```
 
 3. Run the demo script:
@@ -94,16 +116,40 @@ tmux kill-session -t airgap-chat-demo
 
 ## Remote Connection Setup
 
-To connect from a different machine:
+To connect from a different machine, you have two options:
+
+### Option 1: Using Secure Tunnel (Recommended)
+
+This method creates a secure tunnel that works across different networks without port forwarding:
+
+1. On the host machine, run the demo with the tunnel flag:
+   ```bash
+   ./run_chat_demo.sh --tunnel-on
+   ```
+   
+   This will create a secure tunnel and save the connection URL to `tunnel_connection.txt`.
+
+2. On the remote machine, run:
+   ```bash
+   python3 chat_app.py --id remote-user --channel demo-chat --host <TUNNEL_URL> --auth-key demo-key
+   ```
+   
+   Replace `<TUNNEL_URL>` with the URL from `tunnel_connection.txt`.
+
+3. No port forwarding or IP configuration needed!
+
+### Option 2: Direct Connection
+
+This method requires both machines to be on the same network or have proper port forwarding:
 
 1. Start the server on the host machine using one of these methods:
    
-   **Option 1:** Start a standalone server:
+   **Option A:** Start a standalone server:
    ```bash
    python3 -m uvicorn host:app --host 0.0.0.0 --port 9000
    ```
    
-   **Option 2:** Start a client with integrated server:
+   **Option B:** Start a client with integrated server:
    ```bash
    python3 chat_app.py --id host-client --channel demo-chat --auth-key demo-key --start-server
    ```
@@ -139,12 +185,32 @@ To connect from a different machine:
 
 ### LLM Integration Issues
 
-1. **AI responses not working**:
+1. **OpenAI responses not working**:
    - Verify your OpenAI API key is set correctly
    - Ensure at least one client has the API key (provider client)
    - Check the logs for any API errors
 
+2. **Ollama responses not working**:
+   - Ensure Ollama is running (`ollama serve`)
+   - Verify the model is downloaded (`ollama pull llama2`)
+   - Check that OLLAMA_URL is set correctly
+   - Verify the OLLAMA_MODEL exists in your Ollama installation
+
 ## Advanced Usage
+
+### Secure Tunnel for Remote Access
+
+To enable the secure tunnel for remote connections:
+
+```bash
+# When running the demo script
+./run_chat_demo.sh --tunnel-on
+
+# When running a standalone client with server
+python3 chat_app.py --id host-client --channel demo-chat --auth-key demo-key --start-server --tunnel-on
+```
+
+The secure tunnel requires the `zrok` package, which will be automatically installed if missing. You'll need to run `zrok login` to configure your account the first time.
 
 ### Custom Authentication
 

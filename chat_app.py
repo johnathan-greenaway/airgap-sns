@@ -28,8 +28,19 @@ import time
 import hashlib
 import threading
 import socket
+import subprocess
+import shutil
 from typing import Dict, Any, List, Optional, Set, Tuple
 from datetime import datetime
+
+# Load environment variables from .env file if available
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+    logging.info("Loaded environment variables from .env file")
+except ImportError:
+    logging.warning("python-dotenv not installed. Environment variables must be set manually.")
+    logging.warning("Install with: pip install python-dotenv")
 
 # Configure logging
 logging.basicConfig(
@@ -53,13 +64,40 @@ except ImportError as e:
 DEFAULT_URI = "ws://localhost:9000/ws/"
 DEFAULT_CHANNEL = "chat-room"
 DEFAULT_MODEL = "gpt-3.5-turbo"
+DEFAULT_OLLAMA_MODEL = "llama2"
+DEFAULT_OLLAMA_URL = "http://localhost:11434"
 DEFAULT_LOG_FILE = "chat_log.txt"
 DEFAULT_AUTH_KEY = "demo-key"  # Default auth key (should be changed in production)
 DEFAULT_SERVER_PORT = 9000
+DEFAULT_TUNNEL_FILE = "tunnel_connection.txt"
 DEFAULT_SYSTEM_PROMPT = """
 You are a helpful assistant in a group chat. You can see messages from multiple users and respond to them.
 Keep your responses concise and helpful. If you're not sure about something, it's okay to say so.
 """
+
+# LLM Provider types
+LLM_PROVIDER_OPENAI = "openai"
+LLM_PROVIDER_OLLAMA = "ollama"
+
+# Check if Ollama is available
+OLLAMA_AVAILABLE = False
+try:
+    import httpx
+    OLLAMA_AVAILABLE = True
+    logger.info("Ollama support available")
+except ImportError:
+    logger.warning("Ollama support not available (httpx package not found)")
+    logger.warning("Install with: pip install httpx")
+
+# Check if zrok is available
+TUNNEL_AVAILABLE = False
+try:
+    import zrok
+    from zrok.model import ShareRequest
+    import atexit
+    TUNNEL_AVAILABLE = True
+except ImportError:
+    pass
 
 # Message types
 MSG_TYPE_CHAT = "chat"
@@ -69,8 +107,10 @@ MSG_TYPE_LLM_RESPONSE = "llm_response"
 MSG_TYPE_AUTH = "auth"
 MSG_TYPE_AUTH_RESPONSE = "auth_response"
 
-# Server process
+# Server process and tunnel
 server_process = None
+tunnel_share = None
+tunnel_url = None
 
 class ChatMessage:
     """Represents a chat message"""
@@ -112,13 +152,108 @@ def is_port_in_use(port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         return s.connect_ex(('localhost', port)) == 0
 
-def start_server_in_thread(host: str = "0.0.0.0", port: int = DEFAULT_SERVER_PORT) -> None:
+def create_secure_tunnel(port: int = DEFAULT_SERVER_PORT) -> Optional[str]:
+    """Create a secure tunnel to the server"""
+    global tunnel_share, tunnel_url
+    
+    if not TUNNEL_AVAILABLE:
+        logger.warning("Secure tunnel requested but zrok package is not installed")
+        logger.warning("Install with: pip install zrok")
+        return None
+        
+    try:
+        # Set up tunnel
+        logger.info("Creating secure tunnel...")
+        root = zrok.environment.root.Load()
+        
+        # Check if zrok is configured
+        if not root or not root.Config:
+            logger.warning("Secure tunnel not configured. Please run 'zrok login' first")
+            return None
+            
+        # Create share
+        share = zrok.share.CreateShare(
+            root=root, 
+            request=ShareRequest(
+                BackendMode=zrok.model.TCP_TUNNEL_BACKEND_MODE,
+                ShareMode=zrok.model.PUBLIC_SHARE_MODE,
+                Frontends=['public'],
+                Target=f"localhost:{port}"
+            )
+        )
+        
+        # Store share for cleanup
+        tunnel_share = share
+        
+        # Get URL
+        if share and share.FrontendEndpoints and len(share.FrontendEndpoints) > 0:
+            url = share.FrontendEndpoints[0]
+            # Convert to WebSocket URL
+            if url.startswith("https://"):
+                ws_url = url.replace("https://", "wss://")
+            else:
+                ws_url = url.replace("http://", "ws://")
+                
+            # Add WebSocket path
+            if not ws_url.endswith("/"):
+                ws_url += "/"
+            ws_url += "ws/"
+            
+            # Save URL
+            tunnel_url = ws_url
+            
+            # Save to file
+            with open(DEFAULT_TUNNEL_FILE, "w") as f:
+                f.write(f"Tunnel URL: {ws_url}\n")
+                f.write(f"Share this URL with clients to connect remotely\n")
+            
+            # Print to console in a very visible way
+            print("\n" + "=" * 60)
+            print(f"SECURE TUNNEL CREATED - CONNECTION URL:")
+            print(f"=" * 60)
+            print(f"\n{ws_url}\n")
+            print(f"Share this URL with clients to connect remotely")
+            print(f"This URL is also saved to: {DEFAULT_TUNNEL_FILE}")
+            print("=" * 60 + "\n")
+                
+            # Register cleanup
+            def cleanup_tunnel():
+                if tunnel_share:
+                    try:
+                        logger.info("Cleaning up secure tunnel...")
+                        zrok.share.DeleteShare(root=root, shr=tunnel_share)
+                    except Exception as e:
+                        logger.error(f"Error cleaning up tunnel: {str(e)}")
+            
+            atexit.register(cleanup_tunnel)
+            
+            logger.info(f"Secure tunnel created successfully")
+            return ws_url
+            
+    except Exception as e:
+        logger.error(f"Error creating secure tunnel: {str(e)}")
+        
+    return None
+
+def start_server_in_thread(host: str = "0.0.0.0", port: int = DEFAULT_SERVER_PORT, enable_tunnel: bool = False) -> None:
     """Start the notification server in a separate thread"""
     global server_process
     
     # Check if port is already in use
     if is_port_in_use(port):
         logger.info(f"Port {port} is already in use. Assuming server is running.")
+        
+        # Try to create tunnel if requested
+        if enable_tunnel:
+            tunnel_url = create_secure_tunnel(port)
+            if tunnel_url:
+                logger.info(f"Secure tunnel created: {tunnel_url}")
+                print(f"\n=== SECURE TUNNEL CREATED ===")
+                print(f"Connection URL: {tunnel_url}")
+                print(f"Share this URL with clients to connect remotely")
+                print(f"Connection details saved to: {DEFAULT_TUNNEL_FILE}")
+                print(f"=============================\n")
+            
         return
     
     def run_server():
@@ -140,6 +275,13 @@ def start_server_in_thread(host: str = "0.0.0.0", port: int = DEFAULT_SERVER_POR
     for attempt in range(max_attempts):
         if is_port_in_use(port):
             logger.info(f"Server started successfully on port {port}")
+            
+            # Create tunnel if requested
+            if enable_tunnel:
+                tunnel_url = create_secure_tunnel(port)
+                if tunnel_url:
+                    logger.info(f"Secure tunnel created: {tunnel_url}")
+                    # URL is already printed prominently in create_secure_tunnel
             return
         time.sleep(1)
     
@@ -164,9 +306,13 @@ class ChatClient:
         channel: str = DEFAULT_CHANNEL,
         llm_api_key: Optional[str] = None,
         llm_model: str = DEFAULT_MODEL,
+        llm_provider: str = LLM_PROVIDER_OPENAI,
+        ollama_url: str = DEFAULT_OLLAMA_URL,
+        ollama_model: str = DEFAULT_OLLAMA_MODEL,
         system_prompt: str = DEFAULT_SYSTEM_PROMPT,
         auth_key: str = DEFAULT_AUTH_KEY,
-        log_file: Optional[str] = None
+        log_file: Optional[str] = None,
+        stream: bool = True
     ):
         """Initialize the chat client"""
         self.client_id = client_id
@@ -174,9 +320,13 @@ class ChatClient:
         self.channel = channel
         self.llm_api_key = llm_api_key
         self.llm_model = llm_model
+        self.llm_provider = llm_provider
+        self.ollama_url = ollama_url
+        self.ollama_model = ollama_model
         self.system_prompt = system_prompt
         self.auth_key = auth_key
         self.log_file = log_file
+        self.stream = stream
         
         self.notification_client = None
         self.running = False
@@ -184,16 +334,22 @@ class ChatClient:
         self.participants: Set[str] = set()
         self.authenticated_users: Set[str] = set()
         self.is_authenticated = False
-        self.is_llm_provider = llm_api_key is not None
+        self.is_llm_provider = False
         self.auth_attempts = 0
         self.max_auth_attempts = 3
+        self.httpx_client = None
         
-        # Initialize OpenAI client if API key is provided
-        if self.is_llm_provider:
+        # Initialize LLM provider
+        if llm_provider == LLM_PROVIDER_OPENAI and llm_api_key:
             openai.api_key = llm_api_key
-            logger.info("LLM provider mode enabled (API key provided)")
+            self.is_llm_provider = True
+            logger.info(f"OpenAI LLM provider mode enabled (model: {llm_model})")
+        elif llm_provider == LLM_PROVIDER_OLLAMA and OLLAMA_AVAILABLE:
+            self.httpx_client = httpx.AsyncClient(timeout=60.0)
+            self.is_llm_provider = True
+            logger.info(f"Ollama LLM provider mode enabled (model: {ollama_model}, URL: {ollama_url})")
         else:
-            logger.info("Regular client mode (no API key provided)")
+            logger.info("Regular client mode (no LLM provider)")
     
     async def connect(self) -> bool:
         """Connect to the notification server"""
@@ -564,17 +720,13 @@ class ChatClient:
                 "content": f"{user_id}: {message_content}"
             })
             
-            # Call the LLM API
-            response = await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: openai.ChatCompletion.create(
-                    model=self.llm_model,
-                    messages=messages
-                )
-            )
-            
-            # Extract response text
-            response_text = response.choices[0].message.content
+            # Generate response based on provider
+            if self.llm_provider == LLM_PROVIDER_OPENAI:
+                response_text = await self._generate_openai_response(messages)
+            elif self.llm_provider == LLM_PROVIDER_OLLAMA:
+                response_text = await self._generate_ollama_response(messages)
+            else:
+                raise ValueError(f"Unknown LLM provider: {self.llm_provider}")
             
             # Send LLM response
             await self.send_llm_response(request_id, user_id, response_text)
@@ -750,8 +902,60 @@ class ChatClient:
             
             logger.info(f"Sent LLM request (ID: {request_id})")
             
+            # If no LLM provider is available, generate a fallback response
+            # Wait a bit to see if a provider responds
+            await asyncio.sleep(2)
+            
+            # Check if we received a response (would be in message history)
+            found_response = False
+            for msg in reversed(self.message_history[-5:]):
+                if msg.is_llm and msg.sender == "AI":
+                    found_response = True
+                    break
+            
+            if not found_response:
+                # No response received, generate a fallback
+                logger.warning("No LLM provider responded, generating fallback response")
+                
+                # Create fallback message
+                fallback_message = ChatMessage(
+                    sender="AI",
+                    content="I'm sorry, but I couldn't process your request. It seems the LLM provider is not available. Please make sure at least one client has the OPENAI_API_KEY set and is running in provider mode.",
+                    is_llm=True
+                )
+                
+                # Add to history
+                self.message_history.append(fallback_message)
+                
+                # Log message
+                self.log_message(fallback_message)
+                
+                # Print message
+                print(f"\n{fallback_message}")
+                print("> ", end="", flush=True)
+                
+                # Send message to other clients
+                await self.send_chat_message(fallback_message)
+            
         except Exception as e:
             logger.error(f"Error sending LLM request: {str(e)}")
+            
+            # Create error message
+            error_message = ChatMessage(
+                sender="AI",
+                content=f"Sorry, I encountered an error while processing your request: {str(e)}",
+                is_llm=True
+            )
+            
+            # Add to history
+            self.message_history.append(error_message)
+            
+            # Log message
+            self.log_message(error_message)
+            
+            # Print message
+            print(f"\n{error_message}")
+            print("> ", end="", flush=True)
     
     async def send_llm_response(self, request_id: str, user_id: str, content: str):
         """Send an LLM response"""
@@ -839,17 +1043,13 @@ class ChatClient:
                         "content": f"{msg.sender}: {msg.content}"
                     })
             
-            # Call the LLM API
-            response = await asyncio.get_event_loop().run_in_executor(
-                None,
-                lambda: openai.ChatCompletion.create(
-                    model=self.llm_model,
-                    messages=messages
-                )
-            )
-            
-            # Extract response text
-            response_text = response.choices[0].message.content
+            # Generate response based on provider
+            if self.llm_provider == LLM_PROVIDER_OPENAI:
+                response_text = await self._generate_openai_response(messages)
+            elif self.llm_provider == LLM_PROVIDER_OLLAMA:
+                response_text = await self._generate_ollama_response(messages)
+            else:
+                raise ValueError(f"Unknown LLM provider: {self.llm_provider}")
             
             # Create message
             message = ChatMessage(
@@ -886,6 +1086,97 @@ class ChatClient:
             # Send message
             await self.send_chat_message(error_message)
     
+    async def _generate_openai_response(self, messages: List[Dict[str, str]]) -> str:
+        """Generate a response from OpenAI"""
+        try:
+            # Call the OpenAI API
+            response = await asyncio.get_event_loop().run_in_executor(
+                None,
+                lambda: openai.ChatCompletion.create(
+                    model=self.llm_model,
+                    messages=messages
+                )
+            )
+            
+            # Extract response text
+            return response.choices[0].message.content
+        except Exception as e:
+            logger.error(f"Error generating OpenAI response: {str(e)}")
+            raise
+    
+    async def _generate_ollama_response(self, messages: List[Dict[str, str]]) -> str:
+        """Generate a response from Ollama"""
+        if not self.httpx_client:
+            raise ValueError("Ollama client not initialized")
+            
+        try:
+            # Convert messages to Ollama format
+            prompt = ""
+            for msg in messages:
+                role = msg["role"]
+                content = msg["content"]
+                
+                if role == "system":
+                    prompt += f"<s>[INST] <<SYS>>\n{content}\n<</SYS>>\n\n"
+                elif role == "user":
+                    if prompt:
+                        prompt += f"{content} [/INST]"
+                    else:
+                        prompt += f"<s>[INST] {content} [/INST]"
+                elif role == "assistant":
+                    prompt += f" {content} </s><s>[INST] "
+            
+            # Ensure prompt ends properly
+            if not prompt.endswith("[/INST]"):
+                prompt += "[/INST]"
+                
+            # Prepare request data
+            request_data = {
+                "model": self.ollama_model,
+                "prompt": prompt,
+                "stream": self.stream
+            }
+            
+            if self.stream:
+                # Handle streaming response
+                full_response = ""
+                async with self.httpx_client.stream(
+                    "POST", 
+                    f"{self.ollama_url}/api/generate",
+                    json=request_data,
+                    timeout=60.0
+                ) as response:
+                    response.raise_for_status()
+                    async for chunk in response.aiter_text():
+                        try:
+                            chunk_data = json.loads(chunk)
+                            if "response" in chunk_data:
+                                response_text = chunk_data["response"]
+                                full_response += response_text
+                                # Print streaming response
+                                print(response_text, end="", flush=True)
+                        except json.JSONDecodeError:
+                            # Skip invalid JSON chunks
+                            continue
+                
+                # Print newline after streaming
+                print()
+                return full_response
+            else:
+                # Handle non-streaming response
+                response = await self.httpx_client.post(
+                    f"{self.ollama_url}/api/generate",
+                    json=request_data,
+                    timeout=60.0
+                )
+                response.raise_for_status()
+                response_data = response.json()
+                return response_data.get("response", "")
+                
+        except Exception as e:
+            logger.error(f"Error generating Ollama response: {str(e)}")
+            raise
+    
     def log_message(self, message: ChatMessage):
         """Log a message to the log file"""
         if not self.log_file:
@@ -916,7 +1207,17 @@ class ChatClient:
         print(f"Welcome to the Airgap SNS Chat App!")
         print(f"You are connected as: {self.client_id}")
         print(f"Channel: {self.channel}")
-        print(f"LLM integration: {'Provider' if self.is_llm_provider else 'Client'}")
+        
+        if self.is_llm_provider:
+            if self.llm_provider == LLM_PROVIDER_OPENAI:
+                print(f"LLM integration: Provider (OpenAI - {self.llm_model})")
+            elif self.llm_provider == LLM_PROVIDER_OLLAMA:
+                print(f"LLM integration: Provider (Ollama - {self.ollama_model})")
+            else:
+                print(f"LLM integration: Provider (Unknown)")
+        else:
+            print(f"LLM integration: Client")
+            
         print(f"Chat logging: {'Enabled' if self.log_file else 'Disabled'}")
         print("=" * 50)
         print("Type /help for a list of commands")
@@ -950,19 +1251,45 @@ async def main():
     parser.add_argument("--host", help=f"Host URI (default: {DEFAULT_URI})", default=DEFAULT_URI)
     parser.add_argument("--channel", help=f"Chat channel (default: {DEFAULT_CHANNEL})", default=DEFAULT_CHANNEL)
     parser.add_argument("--llm-api-key", help="OpenAI API key for LLM integration")
-    parser.add_argument("--llm-model", help=f"LLM model (default: {DEFAULT_MODEL})", default=DEFAULT_MODEL)
+    parser.add_argument("--llm-model", help=f"OpenAI model (default: {DEFAULT_MODEL})", default=DEFAULT_MODEL)
+    parser.add_argument("--llm-provider", help=f"LLM provider (openai or ollama)", choices=[LLM_PROVIDER_OPENAI, LLM_PROVIDER_OLLAMA], default=LLM_PROVIDER_OPENAI)
+    parser.add_argument("--ollama-url", help=f"Ollama API URL (default: {DEFAULT_OLLAMA_URL})", default=DEFAULT_OLLAMA_URL)
+    parser.add_argument("--ollama-model", help=f"Ollama model (default: {DEFAULT_OLLAMA_MODEL})", default=DEFAULT_OLLAMA_MODEL)
     parser.add_argument("--auth-key", help=f"Authentication key (default: {DEFAULT_AUTH_KEY})", default=DEFAULT_AUTH_KEY)
     parser.add_argument("--log-file", help=f"Log file (default: {DEFAULT_LOG_FILE})", default=DEFAULT_LOG_FILE)
     parser.add_argument("--no-log", help="Disable chat logging", action="store_true")
     parser.add_argument("--start-server", help="Start the notification server in the background", action="store_true")
     parser.add_argument("--server-port", help=f"Server port (default: {DEFAULT_SERVER_PORT})", type=int, default=DEFAULT_SERVER_PORT)
+    parser.add_argument("--tunnel-on", help="Create a secure tunnel for remote connections", action="store_true")
+    parser.add_argument("--no-stream", help="Disable streaming for Ollama responses", action="store_true")
     args = parser.parse_args()
     
-    # Get API key from environment (preferred) or arguments
-    llm_api_key = os.environ.get("OPENAI_API_KEY") or args.llm_api_key
+    # Get values from environment variables or arguments
+    llm_api_key = args.llm_api_key or os.environ.get("OPENAI_API_KEY")
+    auth_key = args.auth_key or os.environ.get("AUTH_KEY", DEFAULT_AUTH_KEY)
+    channel = args.channel or os.environ.get("CHANNEL", DEFAULT_CHANNEL)
+    host_uri = args.host or os.environ.get("HOST_URI", DEFAULT_URI)
+    server_port = args.server_port or int(os.environ.get("PORT", DEFAULT_SERVER_PORT))
+    tunnel_on = args.tunnel_on or os.environ.get("TUNNEL_ENABLED", "").lower() == "true"
+    ollama_url = args.ollama_url or os.environ.get("OLLAMA_URL", DEFAULT_OLLAMA_URL)
+    ollama_model = args.ollama_model or os.environ.get("OLLAMA_MODEL", DEFAULT_OLLAMA_MODEL)
+    stream = not args.no_stream
     
     # Determine log file
     log_file = None if args.no_log else args.log_file
+    
+    # Check for tunnel option
+    if args.tunnel_on and not TUNNEL_AVAILABLE:
+        logger.warning("Secure tunnel requested but zrok package is not installed")
+        logger.warning("Install with: pip install zrok")
+        print("\nWARNING: Secure tunnel requested but zrok package is not installed")
+        print("To enable secure tunneling, install zrok: pip install zrok")
+        print("Then run 'zrok login' to configure your account\n")
+        
+        # Ask if user wants to continue without tunnel
+        response = input("Continue without secure tunnel? (y/n): ")
+        if response.lower() != 'y':
+            return
     
     # Start server if requested
     if args.start_server:
@@ -974,8 +1301,8 @@ async def main():
         port_match = re.match(r"ws://[^:]+:(\d+)/.*", args.host)
         server_port = int(port_match.group(1)) if port_match else args.server_port
         
-        # Start server
-        start_server_in_thread(host=server_host, port=server_port)
+        # Start server with tunnel if requested
+        start_server_in_thread(host=server_host, port=server_port, enable_tunnel=args.tunnel_on)
         
         # Wait for server to be available
         if not wait_for_server(port=server_port):
@@ -985,12 +1312,17 @@ async def main():
     # Create chat client
     client = ChatClient(
         client_id=args.id,
-        host_uri=args.host,
-        channel=args.channel,
+        host_uri=host_uri,
+        channel=channel,
         llm_api_key=llm_api_key,
         llm_model=args.llm_model,
-        auth_key=args.auth_key,
-        log_file=log_file
+        llm_provider=args.llm_provider,
+        ollama_url=ollama_url,
+        ollama_model=ollama_model,
+        system_prompt=DEFAULT_SYSTEM_PROMPT,
+        auth_key=auth_key,
+        log_file=log_file,
+        stream=stream
     )
     
     # Connect to server with retry

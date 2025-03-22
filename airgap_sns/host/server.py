@@ -6,11 +6,14 @@ import threading
 import socket
 import atexit
 from fastapi import FastAPI, WebSocket, BackgroundTasks
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from typing import Optional, Dict, Any, Tuple
-from scheduler import schedule_job
-from burst import parse_burst
+from typing import Optional, Dict, Any, Tuple, AsyncGenerator
 import logging
+
+# Import from the new package structure
+from airgap_sns.core.scheduler import schedule_job
+from airgap_sns.core.burst import parse_burst
 
 # Load environment variables from .env file if available
 try:
@@ -48,7 +51,7 @@ tunnel_url = None
 
 # Try to import audio module with graceful fallback
 try:
-    from audio import AudioTransceiver, async_transmit, async_receive, AUDIO_AVAILABLE
+    from airgap_sns.core.audio import AudioTransceiver, async_transmit, async_receive, AUDIO_AVAILABLE
 except ImportError:
     logger.warning("Audio module not available. Audio features disabled.")
     AUDIO_AVAILABLE = False
@@ -149,11 +152,12 @@ class PubSub:
         self.channels = {}
         self.clients = {}
         self.audio_transceiver = None
+        self.stream_clients = {}
         
         # Initialize audio transceiver if available
         if AUDIO_AVAILABLE:
             try:
-                from audio import AudioTransceiver
+                from airgap_sns.core.audio import AudioTransceiver
                 self.audio_transceiver = AudioTransceiver(callback=self.handle_audio_message)
                 self.audio_transceiver.start_receiver()
                 logger.info("Audio transceiver initialized and started")
@@ -182,6 +186,21 @@ class PubSub:
             except Exception as e:
                 logger.error(f"Failed to send to channel {ch}: {str(e)}")
         logger.info(f"Broadcast message to {count} clients on channel {ch}")
+    
+    async def register_stream(self, stream_id, generator):
+        """Register a streaming generator with a stream ID"""
+        self.stream_clients[stream_id] = generator
+        logger.info(f"Registered stream with ID: {stream_id}")
+        
+    async def unregister_stream(self, stream_id):
+        """Unregister a streaming generator"""
+        if stream_id in self.stream_clients:
+            self.stream_clients.pop(stream_id)
+            logger.info(f"Unregistered stream: {stream_id}")
+            
+    async def get_stream(self, stream_id):
+        """Get a streaming generator by ID"""
+        return self.stream_clients.get(stream_id)
         
     async def register(self, ws, uid):
         """Register a WebSocket with a user ID"""
@@ -226,6 +245,7 @@ class PubSub:
             
         try:
             # Use the async transmit function
+            from airgap_sns.core.audio import async_transmit
             result = await async_transmit(message)
             if result:
                 logger.info(f"Audio message transmitted: {message}")
@@ -285,6 +305,78 @@ async def websocket_endpoint(ws: WebSocket, uid: str, background_tasks: Backgrou
     finally:
         await pubsub.unregister(uid)
 
+@app.post("/stream/{stream_id}")
+async def create_stream(stream_id: str, background_tasks: BackgroundTasks):
+    """Create a new stream endpoint"""
+    logger.info(f"Stream endpoint created: {stream_id}")
+    return {"status": "created", "stream_id": stream_id}
+
+@app.post("/stream/{stream_id}/content")
+async def add_stream_content(stream_id: str, content: Dict[str, Any]):
+    """Add content to a stream"""
+    generator = await pubsub.get_stream(stream_id)
+    if not generator:
+        # Create a new stream queue
+        queue = asyncio.Queue()
+        await pubsub.register_stream(stream_id, stream_generator(stream_id, queue))
+        # Add content to queue
+        await queue.put(content)
+        return {"status": "created_and_added", "stream_id": stream_id}
+    else:
+        # Get the queue from the generator
+        queue = generator.queue
+        # Add content to queue
+        await queue.put(content)
+        return {"status": "added", "stream_id": stream_id}
+
+@app.post("/stream/{stream_id}/complete")
+async def complete_stream(stream_id: str):
+    """Mark a stream as complete"""
+    generator = await pubsub.get_stream(stream_id)
+    if not generator:
+        return {"error": "Stream not found"}
+    
+    # Signal completion
+    await generator.queue.put(None)
+    return {"status": "completed", "stream_id": stream_id}
+
+@app.get("/stream/{stream_id}")
+async def get_stream(stream_id: str):
+    """Get a stream by ID"""
+    generator = await pubsub.get_stream(stream_id)
+    if not generator:
+        # Create a new stream queue and generator
+        queue = asyncio.Queue()
+        generator = stream_generator(stream_id, queue)
+        await pubsub.register_stream(stream_id, generator)
+    
+    return StreamingResponse(
+        generator,
+        media_type="text/event-stream"
+    )
+
+class StreamGenerator:
+    """Stream generator with queue"""
+    
+    def __init__(self, stream_id: str, queue: asyncio.Queue):
+        self.stream_id = stream_id
+        self.queue = queue
+    
+    async def __aiter__(self):
+        return self
+    
+    async def __anext__(self):
+        chunk = await self.queue.get()
+        if chunk is None:  # End of stream
+            await pubsub.unregister_stream(self.stream_id)
+            raise StopAsyncIteration
+        
+        return f"data: {json.dumps(chunk)}\n\n"
+
+def stream_generator(stream_id: str, queue: asyncio.Queue) -> AsyncGenerator[str, None]:
+    """Create a stream generator with a queue"""
+    return StreamGenerator(stream_id, queue)
+
 @app.on_event("shutdown")
 async def shutdown_event():
     """Clean up resources on shutdown"""
@@ -300,9 +392,8 @@ def parse_args():
     parser.add_argument("--reload", help="Enable auto-reload for development", action="store_true")
     return parser.parse_args()
 
-if __name__ == "__main__":
-    import uvicorn
-    
+def run_server():
+    """Run the server with command line arguments"""
     # Parse command line arguments
     args = parse_args()
     
@@ -337,4 +428,8 @@ if __name__ == "__main__":
     
     # Start the server
     logger.info(f"Starting Airgap SNS Notification Host on {host}:{port}")
-    uvicorn.run("host:app", host=host, port=port, reload=reload_enabled)
+    import uvicorn
+    uvicorn.run("airgap_sns.host.server:app", host=host, port=port, reload=reload_enabled)
+
+if __name__ == "__main__":
+    run_server()
