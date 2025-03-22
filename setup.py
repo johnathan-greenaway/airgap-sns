@@ -5,7 +5,7 @@ with open("README.md", "r", encoding="utf-8") as fh:
 
 setup(
     name="airgap_sns",
-    version="0.0.1",
+    version="0.0.3",
     author="Airgap SNS Team",
     author_email="john@fimbriata.dev",
     description="Secure Notification System with audio capabilities",
@@ -27,10 +27,12 @@ setup(
         "cryptography>=36.0.0",
         "aiohttp>=3.8.1",
         "python-dotenv>=0.19.0",
+        "imaplib2>=2.57.0",
     ],
     extras_require={
         "audio": ["ggwave>=0.3.0", "sounddevice>=0.4.4", "numpy>=1.21.0"],
         "chat": ["openai>=0.27.0", "httpx>=0.24.0"],
+        "email": ["imaplib2>=2.57.0"],
         "tunnel": ["zrok>=0.1.0"],
         "dev": ["pytest>=6.2.5", "black>=21.9b0", "isort>=5.9.3"],
     },
@@ -39,6 +41,8 @@ setup(
             "airgap-sns-host=airgap_sns.host.server:run_server",
             "airgap-sns-client=airgap_sns.client.client:run_client",
             "airgap-sns-chat=airgap_sns.chat.app:run_chat_app",
+            "airgap-sns-email=airgap_sns.bin.run_email:main",
+            "airgap-sns-email-demo=airgap_sns.bin.run_email_demo:main",
         ],
     },
 )

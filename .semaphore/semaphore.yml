@@ -15,14 +15,16 @@ blocks:
             - sem-version python 3.11
             - checkout
             - python -m pip install --upgrade pip
+            - cat setup.py  # Show the current setup.py content
+            - sed -i "s/version=\"[^\"]*\"/version=\"0.0.2\"/" setup.py  # Fix the version
+            - cat setup.py  # Show the fixed setup.py
             - pip install .
             - pip install pytest
-            - 'export BASE_VERSION=$(grep -o "version=\"[0-9]*\.[0-9]*\.[0-9]*\"" setup.py | grep -o "[0-9]*\.[0-9]*\.[0-9]*")'
+            - 'export BASE_VERSION=$(grep -o "version=[\"''][0-9]*\.[0-9]*\.[0-9]*" setup.py | grep -o "[0-9]*\.[0-9]*\.[0-9]*")'
             - echo "Base version is $BASE_VERSION"
             - |
               if [[ "${SEMAPHORE_GIT_BRANCH}" == "master" ]]; then
                 echo "On release branch - using version $BASE_VERSION for airgap-sns"
-                sed -i "s/version=\"[^\"]*\"/version=\"$BASE_VERSION\"/" setup.py
                 pip install twine build
                 python -m build
                 TWINE_USERNAME=__token__ TWINE_PASSWORD=${TWINE_PASSWORD} python -m twine upload --verbose dist/*
