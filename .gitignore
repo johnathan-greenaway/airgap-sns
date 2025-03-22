@@ -18,3 +18,4 @@ airgap_sns.egg-info/*
 airgap_sns/chat/__pycache__/*
 airgap_sns/__pycache__
 airgap_sns/client/__pycache__/*
+airgap_sns/bin/*

@@ -9,6 +9,7 @@ A complete, fully-functional Python implementation of an extensible, modular not
 - **Audio Transmission**: Send data between air-gapped devices using sound (via ggwave)
 - **Encryption**: Optional AES encryption for secure communication
 - **Webhooks**: Integration with external systems via HTTP webhooks
+- **Email Notifications**: Monitor email accounts and send notifications for new messages
 - **Water-cooler Channels**: Broadcast notifications to groups of subscribers
 - **Interactive Client**: Command-line interface for sending and receiving notifications
 - **Modular Architecture**: Easily extensible for custom notification types and delivery methods
@@ -28,6 +29,11 @@ pip install openai
 pip install httpx
 ```
 
+For email notification support:
+```bash
+pip install imaplib2
+```
+
 For secure tunnel support (optional):
 ```bash
 pip install zrok
@@ -37,6 +43,7 @@ Note:
 - `ggwave` and `sounddevice` are optional dependencies for audio transmission features.
 - `zrok` is an optional dependency for creating secure tunnels for remote connections.
 - `httpx` is required for Ollama integration (local LLMs).
+- `imaplib2` is required for email notification features.
 
 ## Project Structure
 
@@ -49,7 +56,14 @@ Note:
 ├── crypto.py        # Encryption utilities
 ├── host.py          # Notification host/server
 ├── scheduler.py     # Job scheduling
-└── webhook.py       # Webhook integration
+├── webhook.py       # Webhook integration
+└── airgap_sns/      # Package structure
+    ├── core/        # Core functionality
+    ├── client/      # Client implementation
+    ├── host/        # Server implementation
+    ├── chat/        # Chat application
+    ├── email/       # Email notification module
+    └── bin/         # Command-line scripts
 ```
 
 ## Burst Sequence Format
@@ -200,6 +214,22 @@ This script starts a multi-user chat environment with:
 
 You can then interact with the system by sending messages between clients.
 
+#### Email Notification Demo
+```bash
+# Using the Python module
+python -m airgap_sns.bin.run_email_demo --email user@example.com --password mypassword
+
+# Or using the console script
+airgap-sns-email-demo --email user@example.com --password mypassword
+```
+
+This script starts:
+- Notification server
+- Client listening to email notifications
+- Email notification module that monitors your inbox
+
+You'll receive notifications in the client window whenever new emails arrive.
+
 ### Automated Tests
 
 Run the automated test suite to verify core functionality:
@@ -323,6 +353,7 @@ The system supports creating secure tunnels for remote connections using zrok:
 3. **Secure Messaging**: Send encrypted messages to specific recipients
 4. **Broadcast Alerts**: Notify groups of users about important events
 5. **Webhook Integration**: Trigger external systems based on notifications
+6. **Email Monitoring**: Get notified when important emails arrive in your inbox
 
 ## License
 
