@@ -56,16 +56,40 @@ if ! command -v tmux &> /dev/null; then
     exit 1
 fi
 
-# Check for OpenAI API key
-if [ -z "$OPENAI_API_KEY" ]; then
-    echo "Warning: OPENAI_API_KEY environment variable is not set."
-    echo "LLM integration will be disabled. Set it to enable LLM features:"
-    echo "export OPENAI_API_KEY=your_api_key_here"
-    LLM_ENABLED=false
-else
-    LLM_ENABLED=true
-    echo "LLM integration is enabled (OPENAI_API_KEY is set)"
+# Check for LLM providers
+LLM_PROVIDER=${LLM_PROVIDER:-"openai"}
+LLM_ENABLED=false
+
+# Check for Ollama
+OLLAMA_AVAILABLE=false
+if command -v ollama &> /dev/null || curl -s --head --fail http://localhost:11434/api/version &> /dev/null; then
+    OLLAMA_AVAILABLE=true
+    echo "Ollama is available on this system"
 fi
+
+# Check for OpenAI API key
+if [ -n "$OPENAI_API_KEY" ]; then
+    echo "OpenAI API key is set"
+    if [ "$LLM_PROVIDER" = "openai" ]; then
+        LLM_ENABLED=true
+        echo "LLM integration is enabled (using OpenAI)"
+    fi
+elif [ "$OLLAMA_AVAILABLE" = true ] && [ "$LLM_PROVIDER" = "ollama" ]; then
+    LLM_ENABLED=true
+    echo "LLM integration is enabled (using Ollama)"
+else
+    echo "Warning: No LLM provider is available."
+    echo "Set OPENAI_API_KEY for OpenAI or install Ollama for local models."
+    echo "export OPENAI_API_KEY=your_api_key_here"
+    echo "or"
+    echo "export LLM_PROVIDER=ollama (requires Ollama to be installed)"
+    LLM_ENABLED=false
+fi
+
+# LLM model settings
+DEFAULT_MODEL=${DEFAULT_MODEL:-"gpt-3.5-turbo"}
+OLLAMA_MODEL=${OLLAMA_MODEL:-"llama2"}
+OLLAMA_URL=${OLLAMA_URL:-"http://localhost:11434"}
 
 # Kill any existing tmux session with the same name
 if tmux has-session -t "airgap-chat-demo" 2>/dev/null; then
@@ -99,15 +123,28 @@ CHANNEL=${CHANNEL:-"demo-chat"}
 LOG_DIR="logs"
 mkdir -p $LOG_DIR
 
-# Check if OpenAI API key is valid
+# Validate LLM provider settings
 if [ "$LLM_ENABLED" = true ]; then
-    echo "Verifying OpenAI API key..."
-    if [[ -z "$OPENAI_API_KEY" || "$OPENAI_API_KEY" == "your_api_key_here" ]]; then
-        echo "Warning: OPENAI_API_KEY appears to be invalid or not set properly."
-        echo "LLM integration will be disabled."
-        LLM_ENABLED=false
-    else
-        echo "OpenAI API key is set and appears valid."
+    if [ "$LLM_PROVIDER" = "openai" ]; then
+        # Verify OpenAI API key
+        echo "Verifying OpenAI API key..."
+        if [[ -z "$OPENAI_API_KEY" || "$OPENAI_API_KEY" == "your_api_key_here" ]]; then
+            echo "Warning: OPENAI_API_KEY appears to be invalid or not set properly."
+            echo "LLM integration will be disabled."
+            LLM_ENABLED=false
+        else
+            echo "OpenAI API key is set and appears valid."
+        fi
+    elif [ "$LLM_PROVIDER" = "ollama" ]; then
+        # Verify Ollama is running
+        if ! curl -s --head --fail http://localhost:11434/api/version &> /dev/null; then
+            echo "Warning: Ollama service does not appear to be running."
+            echo "Please start Ollama with 'ollama serve' or make sure it's installed."
+            echo "LLM integration will be disabled."
+            LLM_ENABLED=false
+        else
+            echo "Ollama service is running and available."
+        fi
     fi
 fi
 
@@ -119,11 +156,24 @@ if [ "$TUNNEL_ENABLED" = true ]; then
 fi
 
 if [ "$LLM_ENABLED" = true ]; then
-    # Use environment variable instead of command line argument for API key
-    create_window "provider" "echo 'Starting LLM Provider Client with integrated server...' && OPENAI_API_KEY=\"$OPENAI_API_KEY\" python3 chat_app.py --id provider --channel $CHANNEL --auth-key $AUTH_KEY --log-file $LOG_DIR/provider.log --start-server --llm-model gpt-3.5-turbo $TUNNEL_FLAG"
-    
-    # Print confirmation that LLM is enabled
-    echo "LLM provider started with API key. AI responses should work."
+    if [ "$LLM_PROVIDER" = "openai" ]; then
+        # Use OpenAI provider
+        create_window "provider" "echo 'Starting OpenAI LLM Provider Client with integrated server...' && OPENAI_API_KEY=\"$OPENAI_API_KEY\" python3 chat_app.py --id provider --channel $CHANNEL --auth-key $AUTH_KEY --log-file $LOG_DIR/provider.log --start-server --llm-provider openai --llm-model $DEFAULT_MODEL $TUNNEL_FLAG"
+        
+        # Print confirmation that OpenAI LLM is enabled
+        echo "OpenAI LLM provider started with API key. AI responses should work."
+    elif [ "$LLM_PROVIDER" = "ollama" ]; then
+        # Use Ollama provider
+        STREAM_FLAG=""
+        if [ "$OLLAMA_STREAM" = "false" ]; then
+            STREAM_FLAG="--no-stream"
+        fi
+        
+        create_window "provider" "echo 'Starting Ollama LLM Provider Client with integrated server...' && python3 chat_app.py --id provider --channel $CHANNEL --auth-key $AUTH_KEY --log-file $LOG_DIR/provider.log --start-server --llm-provider ollama --ollama-model $OLLAMA_MODEL --ollama-url $OLLAMA_URL $STREAM_FLAG $TUNNEL_FLAG"
+        
+        # Print confirmation that Ollama LLM is enabled
+        echo "Ollama LLM provider started with model $OLLAMA_MODEL. AI responses should work."
+    fi
 else
     create_window "provider" "echo 'Starting Provider Client with integrated server (LLM disabled)...' && python3 chat_app.py --id provider --channel $CHANNEL --auth-key $AUTH_KEY --log-file $LOG_DIR/provider.log --start-server $TUNNEL_FLAG"
     
@@ -131,6 +181,8 @@ else
     echo "Warning: LLM integration is disabled. AI responses will not work."
     echo "To enable LLM integration, set the OPENAI_API_KEY environment variable:"
     echo "export OPENAI_API_KEY=your_api_key_here"
+    echo "or use Ollama with:"
+    echo "export LLM_PROVIDER=ollama"
 fi
 
 # Keep the server window for logs
@@ -163,6 +215,17 @@ CHAT COMMANDS:
   - Type /users to see all connected users
   - Type /history to see message history
   - Type /exit or /quit to exit the chat
+
+LLM PROVIDERS:
+  This demo supports two LLM providers:
+  1. OpenAI (requires API key)
+     - Set with: export OPENAI_API_KEY=your_api_key_here
+     - Set model: export DEFAULT_MODEL=gpt-3.5-turbo
+  
+  2. Ollama (local models, no API key needed)
+     - Set with: export LLM_PROVIDER=ollama
+     - Set model: export OLLAMA_MODEL=llama2
+     - Requires Ollama to be installed: https://ollama.com
 
 REMOTE CONNECTION SETUP:
   A secure tunnel has been created for remote connections.
@@ -197,6 +260,17 @@ CHAT COMMANDS:
   - Type /users to see all connected users
   - Type /history to see message history
   - Type /exit or /quit to exit the chat
+
+LLM PROVIDERS:
+  This demo supports two LLM providers:
+  1. OpenAI (requires API key)
+     - Set with: export OPENAI_API_KEY=your_api_key_here
+     - Set model: export DEFAULT_MODEL=gpt-3.5-turbo
+  
+  2. Ollama (local models, no API key needed)
+     - Set with: export LLM_PROVIDER=ollama
+     - Set model: export OLLAMA_MODEL=llama2
+     - Requires Ollama to be installed: https://ollama.com
 
 REMOTE CONNECTION SETUP:
   To connect from a different machine:
