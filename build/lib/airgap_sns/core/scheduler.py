@@ -19,6 +19,16 @@ except ImportError:
     logger.warning("Audio module not available. Audio features disabled.")
     AUDIO_AVAILABLE = False
 
+# Try to import Bluetooth mesh module with graceful fallback
+try:
+    from airgap_sns.core.bluetooth_mesh import BluetoothMeshTransceiver, BLUETOOTH_AVAILABLE
+except ImportError:
+    try:
+        from bluetooth_mesh import BluetoothMeshTransceiver, BLUETOOTH_AVAILABLE
+    except ImportError:
+        BLUETOOTH_AVAILABLE = False
+        logger.warning("Bluetooth mesh module not available. Bluetooth features disabled.")
+
 async def schedule_job(params: Dict[str, Any], payload: str, pubsub: Any) -> None:
     """
     Orchestrate notification delivery with validation and error handling
@@ -76,7 +86,8 @@ async def schedule_job(params: Dict[str, Any], payload: str, pubsub: Any) -> Non
                         'destination': params.get("dest"),
                         'channel': params.get("wc"),
                         'encrypted': should_encrypt,
-                        'audio': params.get("audio")
+                        'audio': params.get("audio"),
+                        'bluetooth': params.get("bluetooth")
                     }
                 }
                 
@@ -95,6 +106,15 @@ async def schedule_job(params: Dict[str, Any], payload: str, pubsub: Any) -> Non
         if params.get("audio") == "tx" and AUDIO_AVAILABLE and hasattr(pubsub, "transmit_audio"):
             # Audio transmission is handled by the host in a background task
             pass
+        
+        # Handle Bluetooth mesh transmission if requested
+        if params.get("bluetooth") == "tx" and BLUETOOTH_AVAILABLE and hasattr(pubsub, "transmit_bluetooth"):
+            try:
+                await pubsub.transmit_bluetooth(msg, params.get("dest"))
+                delivery_count += 1
+                logger.info(f"Message transmitted via Bluetooth mesh")
+            except Exception as e:
+                logger.error(f"Bluetooth mesh transmission failed: {str(e)}")
             
         logger.info(f"Notification job completed with {delivery_count} deliveries")
             
