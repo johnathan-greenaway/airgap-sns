@@ -50,6 +50,13 @@ try:
 except ImportError:
     logger.warning("Bluetooth mesh functionality not available. Required packages: bleak, cryptography")
     BLUETOOTH_AVAILABLE = False
+    # Create dummy classes to prevent NameError
+    class BLEDevice:
+        pass
+    class BleakClient:
+        pass
+    class BleakScanner:
+        pass
 
 # Import from burst module for message parsing
 try:
